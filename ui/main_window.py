@@ -465,8 +465,34 @@ class MainWindow(BaseWindow):
                 return os.path.dirname(abs_dest)
         return None
 
+    def get_destination_filepath_from_line(self, line_text):
+        """Extracts the destination absolute file path from a log line."""
+        if "->" in line_text:
+            parts = line_text.split("->")
+            if len(parts) > 1:
+                rel_dest = parts[1].strip()
+                return os.path.normpath(os.path.join(self.target_folder, rel_dest))
+        elif "<-" in line_text:
+            parts = line_text.split("<-")
+            if len(parts) > 1:
+                rel_dest = parts[1].strip()
+                return os.path.normpath(os.path.join(self.target_folder, rel_dest))
+        return None
+
     def on_log_double_click(self, event):
         line_text = self.log_text.get("current linestart", "current lineend")
+        
+        # 1. Try to open folder and highlight/select the specific file if it exists
+        abs_file = self.get_destination_filepath_from_line(line_text)
+        if abs_file and os.path.exists(abs_file):
+            try:
+                import subprocess
+                subprocess.Popen(['explorer', '/select,', abs_file])
+                return
+            except Exception as e:
+                print(f"Failed to select file in explorer: {e}")
+                
+        # 2. Fallback to just opening the folder
         dest_dir = self.get_destination_folder_from_line(line_text)
         if dest_dir and os.path.exists(dest_dir):
             try:
