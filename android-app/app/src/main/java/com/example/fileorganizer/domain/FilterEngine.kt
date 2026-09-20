@@ -34,8 +34,7 @@ class FilterEngine(
         for (cat in activeMatches) {
             if (cat.isKeywordMatchingEnabled && cat.keywords.isNotEmpty()) {
                 val matched = cat.keywords.any { kw ->
-                    val trimmed = kw.trim().lowercase()
-                    trimmed.isNotEmpty() && trimmed in fileNameLower
+                    matchesKeyword(fileName, kw)
                 }
                 if (matched) {
                     return cat.name
@@ -60,13 +59,11 @@ class FilterEngine(
      * Corresponds to organizer.py get_folder_category().
      */
     fun getFolderCategory(folderName: String): String? {
-        val folderNameLower = folderName.lowercase()
         for (cat in categories) {
             if (settings.includedCategories.contains(cat.name)) {
                 if (cat.isKeywordMatchingEnabled && cat.keywords.isNotEmpty()) {
                     val matched = cat.keywords.any { kw ->
-                        val trimmed = kw.trim().lowercase()
-                        trimmed.isNotEmpty() && trimmed in folderNameLower
+                        matchesKeyword(folderName, kw)
                     }
                     if (matched) {
                         return cat.name
@@ -75,6 +72,25 @@ class FilterEngine(
             }
         }
         return null
+    }
+
+    /**
+     * Checks if a target string matches a keyword.
+     * Supports special keyword tags:
+     * - "[japanese]", "[jp]", "[kana]": matches if the text contains any Japanese Hiragana or Katakana.
+     */
+    private fun matchesKeyword(targetName: String, keyword: String): Boolean {
+        val trimmed = keyword.trim()
+        if (trimmed.isEmpty()) return false
+        val trimmedLower = trimmed.lowercase()
+
+        if (trimmedLower == "[japanese]" || trimmedLower == "[jp]" || trimmedLower == "[kana]") {
+            return targetName.any { ch ->
+                (ch in '\u3040'..'\u309F') || (ch in '\u30A0'..'\u30FF')
+            }
+        }
+
+        return trimmedLower in targetName.lowercase()
     }
 
     fun isValidFolder(folderDoc: DocumentFile, category: String?): Pair<Boolean, String> {
@@ -117,8 +133,7 @@ class FilterEngine(
         // 4. Keyword check
         if (cat != null && cat.isKeywordMatchingEnabled && cat.keywords.isNotEmpty()) {
             val matched = cat.keywords.any { kw ->
-                val trimmed = kw.trim().lowercase()
-                trimmed.isNotEmpty() && trimmed in folderNameLower
+                matchesKeyword(folderName, kw)
             }
             if (!matched) {
                 return false to "keyword_mismatch"
@@ -175,8 +190,7 @@ class FilterEngine(
         // 4. Category Keywords filter check (if active for this category)
         if (cat != null && cat.isKeywordMatchingEnabled && cat.keywords.isNotEmpty()) {
             val matched = cat.keywords.any { kw ->
-                val trimmed = kw.trim().lowercase()
-                trimmed.isNotEmpty() && trimmed in fileNameLower
+                matchesKeyword(fileName, kw)
             }
             if (!matched) {
                 return false to "keyword_mismatch"

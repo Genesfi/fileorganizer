@@ -1,0 +1,41 @@
+{
+  "types": {
+    "ASMR": [
+      ".mp3",
+      ".wav",
+      ".flac",
+      ".m4a",
+      ".aac",
+      ".ogg",
+      ".wma",
+      ".zip",
+      ".rar",
+      ".7z",
+      ".tar",
+      ".gz"
+    ]
+  },
+  "keywords": {
+    "ASMR": [
+      "[japanese]",
+      "asmr",
+      "voice",
+      "drama",
+      "dlsite",
+      "rj",
+      "vj",
+      "bj"
+    ]
+  },
+  "keyword_apply_types": {
+    "ASMR": true
+  },
+  "regex_apply_types": {
+    "ASMR": false
+  },
+  "subfolders": {},
+  "included_categories": [
+    "ASMR"
+  ],
+  "organize_folders_mode": true
+}

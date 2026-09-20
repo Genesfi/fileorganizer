@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.yield
+import java.io.File
 import java.security.MessageDigest
 import java.time.Instant
 import java.time.LocalDateTime
@@ -44,7 +45,12 @@ class FileOrganizer(
         val itemTypeLabel = if (folderMode) "folders" else "files"
         emit(OrganizationEvent.Log("Scanning target directory for $itemTypeLabel...", LogType.NORMAL))
         
-        val rootDoc = DocumentFile.fromTreeUri(context, rootUri)
+        val rootDoc = if (rootUri.scheme == "file") {
+            val f = File(rootUri.path ?: "")
+            DocumentFile.fromFile(f)
+        } else {
+            DocumentFile.fromTreeUri(context, rootUri)
+        }
         if (rootDoc == null || !rootDoc.exists() || !rootDoc.isDirectory) {
             emit(OrganizationEvent.Log("Invalid folder selected.", LogType.ERROR))
             emit(OrganizationEvent.Complete(false, null))
@@ -408,6 +414,17 @@ class FileOrganizer(
         originalName: String,
         targetName: String
     ): DocumentFile? {
+        // Step 0: Fast direct atomic rename if both are local files
+        if (srcFile.uri.scheme == "file" && destDir.uri.scheme == "file") {
+            try {
+                val srcObj = File(srcFile.uri.path ?: "")
+                val targetObj = File(destDir.uri.path ?: "", targetName)
+                if (srcObj.renameTo(targetObj)) {
+                    return DocumentFile.fromFile(targetObj)
+                }
+            } catch (_: Exception) {}
+        }
+
         // Step 1: Native move
         try {
             val movedUri = DocumentsContract.moveDocument(
@@ -436,8 +453,15 @@ class FileOrganizer(
 
         var bytesCopied = 0L
         try {
-            context.contentResolver.openInputStream(srcFile.uri)?.use { input ->
-                context.contentResolver.openOutputStream(targetDoc.uri)?.use { output ->
+            val inStream = if (srcFile.uri.scheme == "file") File(srcFile.uri.path ?: "").inputStream() else context.contentResolver.openInputStream(srcFile.uri)
+            val outStream = if (targetDoc.uri.scheme == "file") File(targetDoc.uri.path ?: "").outputStream() else context.contentResolver.openOutputStream(targetDoc.uri)
+
+            if (inStream == null || outStream == null) {
+                throw IllegalStateException("Cannot open stream for ${srcFile.name}")
+            }
+
+            inStream.use { input ->
+                outStream.use { output ->
                     val buffer = ByteArray(65536)
                     var read: Int
                     while (input.read(buffer).also { read = it } != -1) {
@@ -446,7 +470,7 @@ class FileOrganizer(
                     }
                     output.flush()
                 }
-            } ?: throw IllegalStateException("Cannot open stream for ${srcFile.name}")
+            }
 
             val srcLength = srcFile.length()
             if (srcLength > 0 && bytesCopied != srcLength) {
@@ -482,6 +506,17 @@ class FileOrganizer(
         originalName: String,
         targetName: String
     ): DocumentFile? {
+        // Step 0: Fast direct atomic rename if both are local files
+        if (srcDir.uri.scheme == "file" && destDir.uri.scheme == "file") {
+            try {
+                val srcObj = File(srcDir.uri.path ?: "")
+                val targetObj = File(destDir.uri.path ?: "", targetName)
+                if (srcObj.renameTo(targetObj)) {
+                    return DocumentFile.fromFile(targetObj)
+                }
+            } catch (_: Exception) {}
+        }
+
         // Step 1: Try native moveDocument
         try {
             val movedUri = DocumentsContract.moveDocument(
@@ -542,14 +577,19 @@ class FileOrganizer(
                 val newFile = dst.createFile(mime, name)
                     ?: throw IllegalStateException("Could not create file $name in ${dst.name}")
                 
-                context.contentResolver.openInputStream(child.uri)?.use { inStream ->
-                    context.contentResolver.openOutputStream(newFile.uri)?.use { outStream ->
-                        val buf = ByteArray(65536)
-                        var len: Int
-                        while (inStream.read(buf).also { len = it } != -1) {
-                            outStream.write(buf, 0, len)
+                val inStream = if (child.uri.scheme == "file") File(child.uri.path ?: "").inputStream() else context.contentResolver.openInputStream(child.uri)
+                val outStream = if (newFile.uri.scheme == "file") File(newFile.uri.path ?: "").outputStream() else context.contentResolver.openOutputStream(newFile.uri)
+
+                if (inStream != null && outStream != null) {
+                    inStream.use { input ->
+                        outStream.use { output ->
+                            val buf = ByteArray(65536)
+                            var len: Int
+                            while (input.read(buf).also { len = it } != -1) {
+                                output.write(buf, 0, len)
+                            }
+                            output.flush()
                         }
-                        outStream.flush()
                     }
                 }
             }
@@ -559,7 +599,8 @@ class FileOrganizer(
     private fun calculateHash(docFile: DocumentFile): String? {
         return try {
             val digest = MessageDigest.getInstance("MD5")
-            context.contentResolver.openInputStream(docFile.uri)?.use { input ->
+            val inStream = if (docFile.uri.scheme == "file") File(docFile.uri.path ?: "").inputStream() else context.contentResolver.openInputStream(docFile.uri)
+            inStream?.use { input ->
                 val buffer = ByteArray(65536)
                 var bytesRead: Int
                 while (input.read(buffer).also { bytesRead = it } != -1) {

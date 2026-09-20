@@ -51,3 +51,10 @@ env/
 *.njsproj
 *.sln
 *.swp
+
+# Android Studio / Gradle
+.gradle/
+**/build/
+local.properties
+*.hprof
+matcher_result.txt

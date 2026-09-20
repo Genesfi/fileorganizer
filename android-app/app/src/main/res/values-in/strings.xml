@@ -1,0 +1,22 @@
+<resources>
+    <string name="app_name">Pengatur Berkas</string>
+    <string name="browse">Telusuri</string>
+    <string name="simulate">Simulasi</string>
+    <string name="run">Jalankan</string>
+    <string name="stop">Berhenti</string>
+    <string name="undo">Urungkan</string>
+    <string name="group">Grup</string>
+    <string name="filter">Filter</string>
+    <string name="settings">Pengaturan</string>
+    <string name="watermark">Files Organizer v1.0 • Dibuat dengan Kotlin</string>
+    <string name="search_placeholder">Cari log...</string>
+    <string name="clear">Bersihkan</string>
+    <string name="stats_files">Berkas</string>
+    <string name="stats_size">Ukuran</string>
+    <string name="stats_top">Teratas</string>
+    <string name="done_last_batch_undone">Batch terakhir berhasil diurungkan.</string>
+    <string name="done_group_move_undone">Aksi grup folder diurungkan.</string>
+    <string name="done_all_batches_undone">Semua riwayat pengorganisasian dibersihkan.</string>
+    <string name="message_select_valid_folder">Silakan pilih folder yang valid untuk diatur.</string>
+    <string name="name_group_folder">Masukkan nama folder grup:</string>
+</resources>

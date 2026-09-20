@@ -27,6 +27,7 @@ class OrganizeThread(threading.Thread):
         self.current_batch = []
         self.conflict_action = None  # Store choice from resolver
         self.apply_to_all_choice = None  # None, 'overwrite', 'skip', 'duplicate'
+        self.duplicate_files = set()
         
     def log(self, text, tag="normal"):
         self.log_queue.put((text, tag))
@@ -84,7 +85,7 @@ class OrganizeThread(threading.Thread):
                 if cat_keywords:
                     # Check if any keyword matches
                     for kw in cat_keywords:
-                        if kw.strip().lower() in filename_lower:
+                        if self.matches_keyword(filename, kw):
                             return cat
                             
         # 2. If no keyword-specific category matched, fall back to first category that does NOT have keyword matching enabled
@@ -94,6 +95,40 @@ class OrganizeThread(threading.Thread):
                 
         # 3. If all active matches require keywords but none matched, we return None (not organized)
         return None
+
+    def matches_keyword(self, target_name, kw):
+        trimmed = kw.strip()
+        if not trimmed:
+            return False
+        trimmed_lower = trimmed.lower()
+        if trimmed_lower in ["[japanese]", "[jp]", "[kana]"]:
+            return bool(re.search(r'[\u3040-\u309f\u30a0-\u30ff]', target_name))
+        return trimmed_lower in target_name.lower()
+
+    def get_folder_category(self, folder_name):
+        included = self.config.get("included_categories", [])
+        keyword_apply_types = self.config.get("keyword_apply_types", {})
+        keywords_config = self.config.get("keywords", {})
+        
+        # Check categories that are included and have keyword matching enabled
+        for cat in included:
+            if keyword_apply_types.get(cat, False):
+                cat_keywords = keywords_config.get(cat, [])
+                if cat_keywords:
+                    for kw in cat_keywords:
+                        if self.matches_keyword(folder_name, kw):
+                            return cat
+        return None
+
+    def get_dir_size(self, path):
+        total = 0
+        try:
+            for root, dirs, files in os.walk(path):
+                for f in files:
+                    total += os.path.getsize(os.path.join(root, f))
+        except Exception:
+            pass
+        return total
 
     def apply_filters(self, filepath, category):
         if category is None:
@@ -139,10 +174,10 @@ class OrganizeThread(threading.Thread):
         if keyword_apply:
             cat_keywords = self.config.get("keywords", {}).get(category, [])
             if cat_keywords:
-                filename_lower = os.path.basename(filepath).lower()
+                base_name = os.path.basename(filepath)
                 matched = False
                 for kw in cat_keywords:
-                    if kw.strip().lower() in filename_lower:
+                    if self.matches_keyword(base_name, kw):
                         matched = True
                         break
                 if not matched:
@@ -151,7 +186,10 @@ class OrganizeThread(threading.Thread):
         # 5. Size filter
         if self.config.get("enable_size_filter", False):
             try:
-                size_bytes = os.path.getsize(filepath)
+                if os.path.isdir(filepath):
+                    size_bytes = self.get_dir_size(filepath)
+                else:
+                    size_bytes = os.path.getsize(filepath)
                 min_size = self.config.get("min_size", 0)
                 min_unit = self.config.get("min_size_unit", "MB")
                 max_size = self.config.get("max_size", 0)
@@ -205,11 +243,40 @@ class OrganizeThread(threading.Thread):
                 
         return True, "ok"
 
+    def get_file_hash(self, filepath):
+        """Calculate MD5 hash of a file."""
+        import hashlib
+        try:
+            hasher = hashlib.md5()
+            with open(filepath, 'rb') as f:
+                buf = f.read(65536)
+                while len(buf) > 0:
+                    hasher.update(buf)
+                    buf = f.read(65536)
+            return hasher.hexdigest()
+        except Exception:
+            return None
+
     def handle_conflict(self, src_file, dest_file):
         """Returns the target destination file path (possibly renamed) or None to skip."""
         if not os.path.exists(dest_file):
             return dest_file
             
+        # Check if smart duplicate check is enabled
+        if self.config.get("skip_exact_duplicates", True):
+            try:
+                # Compare sizes first (fast)
+                if os.path.getsize(src_file) == os.path.getsize(dest_file):
+                    src_hash = self.get_file_hash(src_file)
+                    dest_hash = self.get_file_hash(dest_file)
+                    if src_hash and dest_hash and src_hash == dest_hash:
+                        # Log that it's a duplicate and skip
+                        self.log(f"[Duplicate] Skipped: {os.path.basename(src_file)} (already exists in destination)", "cyan")
+                        self.duplicate_files.add(src_file)
+                        return None
+            except Exception as e:
+                self.log(f"Error checking duplicate: {e}", "red")
+
         if self.apply_to_all_choice == "overwrite":
             try:
                 os.remove(dest_file)
@@ -251,7 +318,10 @@ class OrganizeThread(threading.Thread):
             return self.handle_conflict(src_file, dest_file)
         elif choice == "overwrite":
             try:
-                os.remove(dest_file)
+                if os.path.isdir(dest_file):
+                    shutil.rmtree(dest_file)
+                else:
+                    os.remove(dest_file)
             except Exception as e:
                 self.log(f"Overwrite failed: {e}", "red")
             return dest_file
@@ -268,9 +338,10 @@ class OrganizeThread(threading.Thread):
         try:
             self.log("Scanning target directory...", "normal")
             
-            # Find files to organize
+            # Find items to organize
             files_to_scan = []
             scan_sub = self.config.get("scan_subfolders", False)
+            folder_mode = self.config.get("organize_folders_mode", False)
             
             # Categories checklist
             included = self.config.get("included_categories", [])
@@ -280,28 +351,70 @@ class OrganizeThread(threading.Thread):
                 self.on_complete(False)
                 return
                 
-            for root, dirs, files in os.walk(self.target_folder):
-                # Exclude directories that are in the except folders list to prevent descending
-                except_folders = self.config.get("except_folders", [])
-                dirs_copy = list(dirs)
-                for d in dirs_copy:
-                    d_abs = os.path.join(root, d)
-                    for excl in except_folders:
-                        excl_abs = os.path.abspath(excl)
-                        if os.path.abspath(d_abs).startswith(excl_abs + os.sep) or os.path.abspath(d_abs) == excl_abs:
-                            dirs.remove(d)
-                            break
+            if folder_mode:
+                for root, dirs, files in os.walk(self.target_folder, topdown=True):
+                    except_folders = self.config.get("except_folders", [])
+                    dirs_copy = list(dirs)
+                    for d in dirs_copy:
+                        d_abs = os.path.join(root, d)
+                        for excl in except_folders:
+                            excl_abs = os.path.abspath(excl)
+                            if os.path.abspath(d_abs).startswith(excl_abs + os.sep) or os.path.abspath(d_abs) == excl_abs:
+                                if d in dirs:
+                                    dirs.remove(d)
+                                break
+                    
+                    dirs_to_check = list(dirs)
+                    for d in dirs_to_check:
+                        d_abs = os.path.join(root, d)
+                        
+                        # Do not scan inside category directories to prevent recursion
+                        is_category_folder = False
+                        for cat in included:
+                            if d == cat:
+                                is_category_folder = True
+                                break
+                            if d.startswith(cat + "_"):
+                                is_category_folder = True
+                                break
+                                
+                        if is_category_folder:
+                            if d in dirs:
+                                dirs.remove(d)
+                            continue
                             
-                for f in files:
-                    filepath = os.path.join(root, f)
-                    files_to_scan.append(filepath)
-                    
-                if not scan_sub:
-                    break # Only scan top-level
-                    
+                        category = self.get_folder_category(d)
+                        if category is not None:
+                            files_to_scan.append(d_abs)
+                            if d in dirs:
+                                dirs.remove(d)
+                                
+                    if not scan_sub:
+                        break
+            else:
+                for root, dirs, files in os.walk(self.target_folder, topdown=True):
+                    except_folders = self.config.get("except_folders", [])
+                    dirs_copy = list(dirs)
+                    for d in dirs_copy:
+                        d_abs = os.path.join(root, d)
+                        for excl in except_folders:
+                            excl_abs = os.path.abspath(excl)
+                            if os.path.abspath(d_abs).startswith(excl_abs + os.sep) or os.path.abspath(d_abs) == excl_abs:
+                                if d in dirs:
+                                    dirs.remove(d)
+                                break
+                                
+                    for f in files:
+                        filepath = os.path.join(root, f)
+                        files_to_scan.append(filepath)
+                        
+                    if not scan_sub:
+                        break
+                        
             total_files = len(files_to_scan)
+            item_type_str = "folders" if folder_mode else "files"
             if total_files == 0:
-                self.log("No files found to organize.", "cyan")
+                self.log(f"No {item_type_str} found to organize.", "cyan")
                 self.progress_callback(1.0)
                 self.on_complete(True)
                 return
@@ -322,8 +435,12 @@ class OrganizeThread(threading.Thread):
                     
                 # Calculate category
                 base_name = os.path.basename(filepath)
-                ext = os.path.splitext(base_name)[1]
-                category = self.get_file_category(base_name, ext)
+                if folder_mode:
+                    ext = ""
+                    category = self.get_folder_category(base_name)
+                else:
+                    ext = os.path.splitext(base_name)[1]
+                    category = self.get_file_category(base_name, ext)
                 
                 # Check filters
                 is_valid, reason = self.apply_filters(filepath, category)
@@ -348,7 +465,7 @@ class OrganizeThread(threading.Thread):
                         # Find custom name or fallback to extension (without dot)
                         sub_pattern = subfolder_configs[category]
                         if not sub_pattern:
-                            subfolder_name = ext[1:].upper() if ext else "NO_EXT"
+                            subfolder_name = "FOLDERS" if folder_mode else (ext[1:].upper() if ext else "NO_EXT")
                         else:
                             subfolder_name = sub_pattern
                             
@@ -380,10 +497,19 @@ class OrganizeThread(threading.Thread):
                     if self.config.get("simulate", False):
                         # Simulation
                         self.log(f"{mode_prefix}Would move {base_name} -> {os.path.relpath(dest_file_path, self.target_folder)}", "orange")
+                        try:
+                            if os.path.isdir(filepath):
+                                size_bytes = self.get_dir_size(filepath)
+                            else:
+                                size_bytes = os.path.getsize(filepath)
+                        except Exception:
+                            size_bytes = 0
                         self.current_batch.append({
                             "src": filepath,
                             "dst": dest_file_path,
-                            "type": "simulate"
+                            "type": "simulate",
+                            "size": size_bytes,
+                            "category": category
                         })
                         simulated_count += 1
                     else:
@@ -392,19 +518,29 @@ class OrganizeThread(threading.Thread):
                         final_dest = self.handle_conflict(filepath, dest_file_path)
                         if final_dest:
                             try:
+                                try:
+                                    if os.path.isdir(filepath):
+                                        size_bytes = self.get_dir_size(filepath)
+                                    else:
+                                        size_bytes = os.path.getsize(filepath)
+                                except Exception:
+                                    size_bytes = 0
                                 os.makedirs(os.path.dirname(final_dest), exist_ok=True)
                                 shutil.move(filepath, final_dest)
                                 self.log(f"Moved: {os.path.basename(filepath)} -> {os.path.relpath(final_dest, self.target_folder)}", "green")
                                 self.current_batch.append({
                                     "src": filepath,
                                     "dst": final_dest,
-                                    "type": "move"
+                                    "type": "move",
+                                    "size": size_bytes,
+                                    "category": category
                                 })
                                 moved_count += 1
                             except Exception as e:
                                 self.log(f"Error moving {base_name}: {e}", "red")
                         else:
-                            self.log(f"Skipped conflict: {base_name}", "cyan")
+                            if filepath not in self.duplicate_files:
+                                self.log(f"Skipped conflict: {base_name}", "cyan")
                             
                 processed += 1
                 self.progress_callback(processed / total_files)
@@ -412,9 +548,9 @@ class OrganizeThread(threading.Thread):
             # Log summary
             self.log(f"--- Summary ---", "normal")
             if self.config.get("simulate", False):
-                self.log(f"Simulated: {simulated_count} files, Filtered: {filtered_count} files.", "normal")
+                self.log(f"Simulated: {simulated_count} {item_type_str}, Filtered: {filtered_count} {item_type_str}.", "normal")
             else:
-                self.log(f"Moved: {moved_count} files, Filtered: {filtered_count} files.", "normal")
+                self.log(f"Moved: {moved_count} {item_type_str}, Filtered: {filtered_count} {item_type_str}.", "normal")
                 # Save to batch history for undo
                 if self.current_batch:
                     save_to_history(self.current_batch)

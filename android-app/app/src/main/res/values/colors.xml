@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Material 3 Light Colors (Indigo/Purple Seed) -->
+    <color name="primary">#4F52B2</color>
+    <color name="onPrimary">#FFFFFF</color>
+    <color name="primaryContainer">#E0E0FF</color>
+    <color name="onPrimaryContainer">#00006E</color>
+
+    <color name="secondary">#5C5D72</color>
+    <color name="onSecondary">#FFFFFF</color>
+    <color name="secondaryContainer">#E1E1F9</color>
+    <color name="onSecondaryContainer">#191A2C</color>
+
+    <color name="tertiary">#78536B</color>
+    <color name="onTertiary">#FFFFFF</color>
+    <color name="tertiaryContainer">#FFD8EE</color>
+    <color name="onTertiaryContainer">#2E1126</color>
+
+    <color name="error">#BA1A1A</color>
+    <color name="onError">#FFFFFF</color>
+    <color name="errorContainer">#FFDAD6</color>
+    <color name="onErrorContainer">#410002</color>
+
+    <color name="background">#FEFBFF</color>
+    <color name="onBackground">#1B1B1F</color>
+    <color name="surface">#FEFBFF</color>
+    <color name="onSurface">#1B1B1F</color>
+    <color name="surfaceVariant">#E3E1EC</color>
+    <color name="onSurfaceVariant">#46464F</color>
+    <color name="outline">#777680</color>
+
+    <!-- Legacy Colors (can be removed later if not used) -->
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+</resources>

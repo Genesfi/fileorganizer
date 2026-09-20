@@ -50,13 +50,21 @@ class MainViewModel @Inject constructor(
 
     fun onFolderSelected(uri: Uri) {
         selectedFolderUri = uri
-        selectedFolderPath = uri.path ?: uri.toString()
+        selectedFolderPath = if (uri.scheme == "file") {
+            uri.path ?: ""
+        } else {
+            uri.path ?: uri.toString()
+        }
         
-        // Take persistable permission
-        getApplication<Application>().contentResolver.takePersistableUriPermission(
-            uri,
-            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-        )
+        // Take persistable permission if content URI
+        if (uri.scheme == "content") {
+            try {
+                getApplication<Application>().contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+            } catch (_: Exception) {}
+        }
     }
 
     fun runOrganization() {
@@ -172,19 +180,38 @@ class MainViewModel @Inject constructor(
                     val srcParentUri = Uri.parse(srcParentUriStr)
                     val destParentUri = mf.destinationParentUri?.let { Uri.parse(it) }
 
-                    val destDoc = if (mf.isDirectory) {
+                    val destDoc = if (destUri.scheme == "file") {
+                        androidx.documentfile.provider.DocumentFile.fromFile(java.io.File(destUri.path ?: ""))
+                    } else if (mf.isDirectory) {
                         androidx.documentfile.provider.DocumentFile.fromTreeUri(getApplication(), destUri)
                     } else {
                         androidx.documentfile.provider.DocumentFile.fromSingleUri(getApplication(), destUri)
                     }
-                    val srcParentDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(getApplication(), srcParentUri)
+
+                    val srcParentDoc = if (srcParentUri.scheme == "file") {
+                        androidx.documentfile.provider.DocumentFile.fromFile(java.io.File(srcParentUri.path ?: ""))
+                    } else {
+                        androidx.documentfile.provider.DocumentFile.fromTreeUri(getApplication(), srcParentUri)
+                    }
 
                     if (destDoc != null && destDoc.exists() && srcParentDoc != null && srcParentDoc.exists()) {
                         var restored = false
+
+                        // Attempt 0: Fast atomic rename if both are file:// scheme
+                        if (destUri.scheme == "file" && srcParentUri.scheme == "file") {
+                            try {
+                                val destFile = java.io.File(destUri.path ?: "")
+                                val targetFile = java.io.File(srcParentUri.path ?: "", mf.originalFileName ?: destFile.name)
+                                if (destFile.renameTo(targetFile)) {
+                                    restored = true
+                                }
+                            } catch (_: Exception) {}
+                        }
+
                         val moveSourceParentUri = destParentUri ?: destDoc.parentFile?.uri
 
                         // Attempt 1: Native DocumentsContract moveDocument
-                        if (moveSourceParentUri != null) {
+                        if (!restored && moveSourceParentUri != null) {
                             try {
                                 val movedBackUri = android.provider.DocumentsContract.moveDocument(
                                     contentResolver,
